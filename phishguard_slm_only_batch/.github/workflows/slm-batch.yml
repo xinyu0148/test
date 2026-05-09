@@ -1,0 +1,68 @@
+name: SLM Batch Evaluation
+
+on:
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "Optional sample limit for smoke testing. Leave empty to run all samples."
+        required: false
+        default: ""
+
+jobs:
+  slm-batch:
+    name: Run CoreML SLM batch test
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout repository with LFS
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Verify required files
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f "phishguard_text_dataset_eval/output/phishguard_text_dataset.jsonl"
+          test -d "phishguard_slm_only_batch/assets/SLM/PhishingDetector.mlpackage"
+          test -f "phishguard_slm_only_batch/assets/SLM/tokenizer.json"
+          swift --version
+          python3 --version
+
+      - name: Run local SLM batch inference
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd phishguard_slm_only_batch
+
+          CMD=(
+            swift run -c release PhishGuardSLMBatch
+            --dataset ../phishguard_text_dataset_eval/output/phishguard_text_dataset.jsonl
+            --model assets/SLM/PhishingDetector.mlpackage
+            --tokenizer assets/SLM/tokenizer.json
+            --output output/phishguard_local_results.jsonl
+          )
+
+          LIMIT="${{ github.event.inputs.limit }}"
+          if [[ -n "$LIMIT" ]]; then
+            CMD+=(--limit "$LIMIT")
+          fi
+
+          "${CMD[@]}"
+
+      - name: Evaluate local decisions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 phishguard_text_dataset_eval/evaluate_app_results.py \
+            --dataset phishguard_text_dataset_eval/output/phishguard_text_dataset.jsonl \
+            --results phishguard_slm_only_batch/output/phishguard_local_results.jsonl \
+            --output-dir phishguard_text_dataset_eval/output/evaluation
+
+      - name: Upload batch results
+        uses: actions/upload-artifact@v4
+        with:
+          name: phishguard-slm-batch-results
+          path: |
+            phishguard_slm_only_batch/output/phishguard_local_results.jsonl
+            phishguard_text_dataset_eval/output/evaluation/
